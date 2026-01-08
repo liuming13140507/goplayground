@@ -23,7 +23,7 @@ RACE_FLAGS=-race
 # GODEBUG: schedtrace=1000 enables scheduler tracing every 1000ms
 # GODEBUG: gcpacertrace=1 enables GC pacer tracing
 export GOGC=100
-export GODEBUG=gctrace=1
+export GODEBUG=gctrace=0
 
 .PHONY: all build clean server debug run-server help tidy fmt vet test race run-debug
 
