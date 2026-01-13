@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eino Chat</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; margin: 0; }
+        #chat-window { flex: 1; overflow-y: auto; padding: 20px; border-bottom: 1px solid #ccc; }
+        #input-area { padding: 20px; display: flex; gap: 10px; }
+        #message-input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .message { margin-bottom: 10px; }
+        .user { color: #007bff; font-weight: bold; }
+        .bot { color: #28a745; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="chat-window"></div>
+    <div id="input-area">
+        <select id="protocol-select">
+            <option value="ws">WebSocket</option>
+            <option value="sse">EventStream (SSE)</option>
+        </select>
+        <select id="agent-select">
+            <option value="doubao">DouBao</option>
+        </select>
+        <input type="text" id="message-input" placeholder="Type a message..." autocomplete="off">
+        <button id="send-btn">Send</button>
+    </div>
+
+    <script>
+        const chatWindow = document.getElementById('chat-window');
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const agentSelect = document.getElementById('agent-select');
+        const protocolSelect = document.getElementById('protocol-select');
+        
+        const sessionId = 'session-' + Math.random().toString(36).substr(2, 9);
+        let socket = null;
+
+        function initWebSocket() {
+            if (socket) socket.close();
+            socket = new WebSocket(`ws://${window.location.host}/ai/ws`);
+            socket.onopen = () => appendMessage('System', 'WebSocket Connected');
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleServerEvent(data);
+            };
+            socket.onclose = () => appendMessage('System', 'WebSocket Disconnected');
+        }
+
+        function handleServerEvent(data) {
+            if (data.type === 'stringevent' || data.event) { // WS uses type, SSE uses event name but data structure is similar
+                const eventType = data.event || data.type; 
+                // In our SSE implementation, we use c.SSEvent("stringevent", ...)
+                // So the data itself will have the "event" field ("message" or "end")
+                if (data.event === 'message') {
+                    appendOrUpdateBotMessage(data.content);
+                } else if (data.event === 'end') {
+                    finalizeBotMessage();
+                }
+            } else if (data.type === 'error') {
+                appendMessage('Error', data.content);
+            }
+        }
+
+        // Initialize default protocol
+        initWebSocket();
+
+        protocolSelect.onchange = () => {
+            if (protocolSelect.value === 'ws') {
+                initWebSocket();
+            } else {
+                if (socket) socket.close();
+                appendMessage('System', 'Switched to EventStream mode');
+            }
+        };
+
+        let currentBotMessageElement = null;
+
+        function appendMessage(sender, content) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message';
+            msgDiv.innerHTML = `<span class="${sender.toLowerCase()}">${sender}:</span> ${content}`;
+            chatWindow.appendChild(msgDiv);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+
+        function appendOrUpdateBotMessage(content) {
+            if (!currentBotMessageElement) {
+                currentBotMessageElement = document.createElement('div');
+                currentBotMessageElement.className = 'message';
+                currentBotMessageElement.innerHTML = `<span class="bot">Bot:</span> <span class="bot-content"></span>`;
+                chatWindow.appendChild(currentBotMessageElement);
+            }
+            const contentSpan = currentBotMessageElement.querySelector('.bot-content');
+            contentSpan.textContent += content;
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+
+        function finalizeBotMessage() {
+            currentBotMessageElement = null;
+        }
+
+        sendBtn.onclick = sendMessage;
+        messageInput.onkeypress = (e) => {
+            if (e.key === 'Enter') sendMessage();
+        };
+
+        function sendMessage() {
+            const content = messageInput.value.trim();
+            if (!content) return;
+
+            appendMessage('User', content);
+            const protocol = protocolSelect.value;
+            const agent = agentSelect.value;
+
+            if (protocol === 'ws') {
+                if (socket.readyState !== WebSocket.OPEN) {
+                    appendMessage('Error', 'WebSocket not connected. Reconnecting...');
+                    initWebSocket();
+                    return;
+                }
+                socket.send(JSON.stringify({
+                    sessionId: sessionId,
+                    content: content,
+                    type: 'chat',
+                    agentType: agent
+                }));
+            } else {
+                // SSE mode
+                const url = `/ai/sse?sessionId=${sessionId}&content=${encodeURIComponent(content)}&agentType=${agent}`;
+                const eventSource = new EventSource(url);
+                
+                eventSource.addEventListener('stringevent', (event) => {
+                    const data = JSON.parse(event.data);
+                    handleServerEvent(data);
+                    if (data.event === 'end') {
+                        eventSource.close();
+                    }
+                });
+
+                eventSource.onerror = (err) => {
+                    console.error("SSE Error:", err);
+                    appendMessage('Error', 'EventStream connection failed');
+                    eventSource.close();
+                };
+            }
+            messageInput.value = '';
+        }
+    </script>
+</body>
+</html>
+
